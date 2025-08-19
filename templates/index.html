@@ -1,0 +1,138 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Crypto Signals • Telegram v2.6 Pro</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100">
+  <div class="max-w-6xl mx-auto p-6 space-y-6">
+    <header class="flex items-center justify-between">
+      <h1 class="text-2xl font-bold">Crypto Signals • Telegram v2.6 Pro</h1>
+      <div id="runstate" class="text-sm px-3 py-1 rounded bg-slate-800">Status: <span id="rs">—</span></div>
+    </header>
+
+    <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div class="bg-slate-900/70 rounded-xl p-4 space-y-3">
+        <h2 class="text-lg font-semibold">Controls</h2>
+        <div class="flex gap-2">
+          <button id="startBtn" class="bg-emerald-600 hover:bg-emerald-700 rounded px-4 py-2">Start</button>
+          <button id="stopBtn" class="bg-rose-600 hover:bg-rose-700 rounded px-4 py-2">Stop</button>
+        </div>
+        <div class="pt-2 border-t border-slate-800">
+          <button id="clearBtn" class="bg-slate-700 hover:bg-slate-600 rounded px-4 py-2">Clear Logs</button>
+        </div>
+        <div class="pt-2 border-t border-slate-800">
+          <button id="tgTestBtn" class="bg-indigo-600 hover:bg-indigo-700 rounded px-4 py-2">Test Telegram</button>
+        </div>
+        <div class="pt-2 border-t border-slate-800">
+          <button id="moversScanBtn" class="bg-teal-600 hover:bg-teal-700 rounded px-4 py-2">Scan Movers Now</button>
+        </div>
+        <div class="flex gap-2 pt-2">
+          <button id="forceBtn" class="bg-blue-600 hover:bg-blue-700 rounded px-4 py-2">Force Send Current Signals</button>
+          <button id="resetBtn" class="bg-amber-600 hover:bg-amber-700 rounded px-4 py-2">Reset Signal State</button>
+        </div>
+      </div>
+      <div class="bg-slate-900/70 rounded-xl p-4 md:col-span-2">
+        <h2 class="text-lg font-semibold mb-2">Live Logs</h2>
+        <div id="logs" class="text-sm font-mono bg-slate-950/60 rounded p-3 min-h-[240px] max-h-[420px] overflow-auto"></div>
+      </div>
+    </section>
+
+    <section class="bg-slate-900/70 rounded-xl p-4">
+      <h2 class="text-lg font-semibold">Strategy Status</h2>
+      <div id="statuses" class="grid grid-cols-2 md:grid-cols-6 gap-3 mt-2"></div>
+    </section>
+  </div>
+
+  <script>
+(function () {
+  const BASE = {{ request.script_root|tojson|safe }} || '';
+  async function fetchJSON(url, opts) {
+    const r = await fetch(url, opts || {});
+    const ct = r.headers.get('content-type') || '';
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error(`HTTP ${r.status} ${r.statusText}: ${txt.slice(0,200)}`);
+    }
+    if (ct.includes('application/json')) return r.json();
+    const txt = await r.text();
+    throw new Error('Expected JSON, got: ' + txt.slice(0,200));
+  }
+
+  const ioObj = (typeof io === 'function') ? io : null;
+  const socket = ioObj ? ioObj({ path: (BASE || '') + '/socket.io' }) : { on: ()=>{} };
+  const $ = (id) => document.getElementById(id);
+  const rsEl = $('rs');
+  const logsEl = $('logs');
+  const statusesEl = $('statuses');
+
+  function appendLog(line) {
+    if (!logsEl) return;
+    const el = document.createElement('div');
+    el.textContent = line;
+    logsEl.appendChild(el);
+    logsEl.scrollTop = logsEl.scrollHeight;
+  }
+
+  function makeStatusCard(asset, status) {
+    if (!statusesEl) return;
+    const id = 'st-' + asset;
+    let el = document.getElementById(id);
+    if (!el) {
+      el = document.createElement('div');
+      el.id = id;
+      el.className = 'rounded bg-slate-800 p-3 text-sm';
+      statusesEl.appendChild(el);
+    }
+    el.textContent = asset + ': ' + status;
+  }
+
+  async function refreshStatus() {
+    try {
+      const j = await fetchJSON((BASE || '') + '/status', { cache: 'no-store' });
+      if (rsEl) rsEl.textContent = j.running ? 'RUNNING' : 'STOPPED';
+      if (j.last_state && typeof j.last_state === 'object') {
+        Object.entries(j.last_state).forEach(([asset, st]) => makeStatusCard(asset, st));
+      }
+    } catch (e) {
+      appendLog('Status error: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  async function loadLogs() {
+    try {
+      const j = await fetchJSON((BASE || '') + '/logs?lines=400', { cache: 'no-store' });
+      if (logsEl) {
+        logsEl.innerHTML = '';
+        (j.lines || []).forEach(appendLog);
+      }
+    } catch (e) {
+      appendLog('Logs error: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  const bind = (id, handler) => {
+    const el = $(id);
+    if (el) el.onclick = handler;
+  };
+
+  bind('startBtn', async () => { await fetch((BASE || '') + '/start', { method: 'POST' }); refreshStatus(); });
+  bind('stopBtn',  async () => { await fetch((BASE || '') + '/stop',  { method: 'POST' }); refreshStatus(); });
+  bind('clearBtn', async () => { await fetch((BASE || '') + '/logs/clear', { method: 'POST' }); logsEl && (logsEl.innerHTML = ''); });
+  bind('tgTestBtn', async () => { const r = await fetch((BASE || '') + '/telegram/test', { method: 'POST' }); appendLog('Telegram test: ' + JSON.stringify(await r.json())); });
+  bind('moversScanBtn', async () => { const r = await fetch((BASE || '') + '/movers/scan', { method: 'POST' }); appendLog('Movers scan: ' + JSON.stringify(await r.json())); });
+
+  if (socket && socket.on) {
+    socket.on('log',  (msg) => appendLog(msg.line));
+    socket.on('status', (msg) => makeStatusCard(msg.asset, msg.status));
+  }
+
+  refreshStatus();
+  loadLogs();
+})();
+</script>
+</body>
+</html>
